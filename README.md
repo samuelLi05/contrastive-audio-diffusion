@@ -1,18 +1,12 @@
-<div align="center">
-  <h1 style="font-size: 36px;">Tiny Audio Diffusion</h1>
-  <img src="./images/tiny-audio-diffusion.png" width="250px" alt="Tiny Audio Diffusion Logo" />
-</div>
-<br>
+# Contrastive Audio Diffusion
 
-[![Hugging Face Spaces Badge](https://img.shields.io/badge/%F0%9F%A4%97_Spaces_Demo-blue)](https://huggingface.co/spaces/crlandsc/tiny-audio-diffusion) [![YouTube Tutorial Badge](https://img.shields.io/badge/Repo_Tutorial-red?logo=YouTube)](https://youtu.be/m6Eh2srtTro) [![Towards Data Science Badge](https://img.shields.io/badge/Towards_Data_Science-red?logo=Medium&color=black)](https://medium.com/towards-data-science/tiny-audio-diffusion-ddc19e90af9b) [![GitHub License](https://img.shields.io/github/license/crlandsc/tiny-audio-diffusion)](https://github.com/crlandsc/tiny-audio-diffusion/blob/main/LICENSE) [![GitHub Repo stars](https://img.shields.io/github/stars/crlandsc/tiny-audio-diffusion?color=gold)](https://github.com/crlandsc/tiny-audio-diffusion/stargazers) [![GitHub forks](https://img.shields.io/github/forks/crlandsc/tiny-audio-diffusion?color=green)](https://github.com/crlandsc/tiny-audio-diffusion/forks)
+Authors: Samuel Li, Zachary Houlton, Ariv Mondal, Daniel Zhu
 
-This is a repository for generating short audio samples and training waveform diffusion models on a consumer-grade GPU with less than 2GB VRAM.
+Originally forked from an earlier tiny-audio-diffusion repository; this codebase has been refactored and extended into a new, standalone project focused on conditional waveform diffusion with contrastive label alignment. The original project is acknowledged here once as a starting point.
 
 ## Motivation
 
-The purpose of this project is to provide access to stereo high-resolution (44.1kHz) conditional and unconditional audio waveform (1D U-Net) diffusion code for those interested in exploration but who have limited resources. There are many methods for audio generation on low-level hardware, but less so specifically for waveform-based diffusion.
-
-The repository is built heavily adapting code from Archinet's [audio-diffusion-pytorch](https://github.com/archinetai/audio-diffusion-pytorch) libary. A huge thank you to [Flavio Schneider](https://github.com/flavioschneider) for his incredible open-source work in this field!
+Contrastive Audio Diffusion provides a focused codebase for training and running conditional waveform diffusion models (1‑D U‑Net) that use contrastive learning to align label embeddings with audio embeddings. The aim is to make conditional waveform diffusion experiments reproducible and extensible, especially for NSynth‑based conditional workflows.
 
 
 ## Background
@@ -23,244 +17,156 @@ Waveform diffusion is able to retain this important feature as it does not perfo
 
 This repository seeks to offer some base code to those looking to experiment with and learn more about waveform diffusion on their own computer without having to purchase cloud resources or upgrade hardware. This goes for not only *inference*, but *training* your own models as well!
 
-To make this feasible, however, there must be a tradeoff of quality, speed, and sample length. Because of this, I have focused on training base models for one-shot drum samples - as they are inherently short in sample length.
+To make this feasible, however, there must be a tradeoff of quality, speed, and sample length. Because of this, we have focused on training base models for one-shot drum samples - as they are inherently short in sample length.
 
 The current configuration is set up to be able to train ~0.75 second stereo samples at 44.1kHz, allowing for the generation of high-quality one-shot audio samples. The network configuration can be adjusted to improve the resolution, sample rate, training and inference speed, sample length, etc. but, of course, more hardware resources will be required.
-
-Other methods of diffusion, such as diffusion in the latent space ([Stable Diffusion's](https://stability.ai/stablediffusion) secret sauce), compared to this repo's raw waveform diffusion can offer an improvement and other tradeoffs between quality, memory requirements, speed, etc. I recommend this repo to remain up-to-date with the latest research in generative audio: https://github.com/archinetai/audio-ai-timeline
-
-Also recommended is [Harmonai's](https://www.harmonai.org/) community project, [Dance Diffusion](https://github.com/Harmonai-org/sample-generator), which implements similar functionality to this repo on a larger scale with several pre-trained models. [Colab notebook](https://colab.research.google.com/github/Harmonai-org/sample-generator/blob/main/Dance_Diffusion.ipynb) available.
-
-**April 2024 update:**
-
-Some additional useful generative audio tools/repos:
-- [Stable Audio Tools](https://github.com/Stability-AI/stable-audio-tools) (used in [Stable Audio](https://www.stableaudio.com/)) - Useful audio tools for building and training models.
-- [audiocraft](https://github.com/facebookresearch/audiocraft) (used in [MusicGen](https://audiocraft.metademolab.com/musicgen.html) & [AudioGen](https://audiocraft.metademolab.com/audiogen.html)) - Useful audio tools for building and training models.
-- [audiomentations](https://github.com/iver56/audiomentations) - Good library for implementing audio augmentations on CPU for training. See [torch-audiomentations](https://github.com/asteroid-team/torch-audiomentations) for GPU implementation.
 
 ---
 
 ## Setup
 
-Follow these steps to set up an environment for both generating audio samples and training models.
+<div align="center">
+  <h1 style="font-size: 36px;">Contrastive Audio Diffusion</h1>
+</div>
 
-*NOTE:* To use this repo with a GPU, you must have a CUDA-capable GPU and have the CUDA toolkit installed for your specific to your system (ex. Linux, x86_64, WSL-Ubuntu). More information can be found [here](https://developer.nvidia.com/cuda-toolkit).
+Built from an initial tiny‑audio‑diffusion codebase; this repository has been refocused and extended to provide conditional waveform diffusion with contrastive label alignment. The project name is now "Contrastive Audio Diffusion" and the code, configs, and documentation below reflect this conditional mode as the primary workflow.
 
-#### 1. Create a Virtual Environment:
+**Overview**
 
-Ensure that [Anaconda (or Miniconda)](https://docs.anaconda.com/free/anaconda/install/index.html) is installed and activated. From the command line, `cd` into the [`setup/`](setup/) folder and run the following lines:
-```bash
-conda env create -f environment.yml
-conda activate tiny-audio-diffusion
-```
+Contrastive Audio Diffusion trains waveform diffusion models that generate short audio samples (seconds or sub‑second clips) conditioned on instrument labels. The key components are:
 
-This will create and activate a conda environment from the [`setup/environment.yml`](setup/environment.yml) file and install the dependencies in [`setup/requirements.txt`](setup/requirements.txt).
+- A 1‑D U‑Net denoiser wrapped by a diffusion sampler (VDiffusion).
+- Optional attention and cross‑attention inside the U‑Net for long‑range context and conditioning fusion.
+- Two conditioning modes: one‑hot concatenation and learnable label embedding (with optional cross‑attention).
+- An auxiliary contrastive loss that aligns label embeddings with audio embeddings so conditioning vectors become semantically meaningful.
 
-#### 2. Install Python Kernel For Jupyter Notebook
+Recommended background reading: Audio denoising and diffusion concepts are well explained in this Medium post: https://medium.com/@zacharyhoulton/audio-denoising-using-diffusion-c2ae04d20c4e
 
-Run the following line to create a kernel for the current environment to run the inference notebook.
+**Why conditional + contrastive?**
 
-```bash
-python -m ipykernel install --user --name tiny-audio-diffusion --display-name "tiny-audio-diffusion (Python 3.10)"
-```
-
-#### 3. Define Environment Variables
-
-Rename [`.env.tmp`](.env.tmp) to `.env` and replace the entries with your own variables (example values are random).
-
-```bash
-DIR_LOGS=/logs
-DIR_DATA=/data
-
-# Required if using Weights & Biases (W&B) logger
-WANDB_PROJECT=tiny_drum_diffusion # Custom W&B name for current project
-WANDB_ENTITY=johnsmith # W&B username
-WANDB_API_KEY=a21dzbqlybbzccqla4txa21dzbqlybbzccqla4tx # W&B API key
-```
-
-*NOTE:* Sign up for a [Weights & Biases](https://wandb.ai/site) account to log audio samples, spectrograms, and other metrics while training (it's free!).
-
-W&B logging example for this repo [here](https://wandb.ai/crlandsc/unconditional-drum-diffusion?workspace=user-crlandsc).
+The diffusion denoiser learns to reconstruct clean waveforms from noisy inputs. Contrastive learning forces label embeddings to be close to their matching clean audio embeddings and far from mismatched ones. When used together, the model learns not only how to denoise, but how to denoise with intent: the conditioning vector becomes an "instruction" the U‑Net can follow to produce the desired instrument timbre.
 
 ---
 
-## Pre-trained Models
+**Quick Start**
 
-Pretrained models can be found on Hugging Face (each model contains a `.ckpt` and `.yaml` file):
+1. Create the environment and activate it (see `setup/environment.yml` and `setup/requirements.txt`):
 
-|Model|Link|
-|---|---|
-|Kicks|[crlandsc/tiny-audio-diffusion-kicks](https://huggingface.co/crlandsc/tiny-audio-diffusion-kicks)|
-|Snares|[crlandsc/tiny-audio-diffusion-snares](https://huggingface.co/crlandsc/tiny-audio-diffusion-snares)|
-|Hi-hats|[crlandsc/tiny-audio-diffusion-hihats](https://huggingface.co/crlandsc/tiny-audio-diffusion-hihats)|
-|Percussion (all drum types)|[crlandsc/tiny-audio-diffusion-percussion](https://huggingface.co/crlandsc/tiny-audio-diffusion-percussion)|
+```bash
+conda env create -f setup/environment.yml
+conda activate contrastive-audio-diffusion
+```
 
-*See W&B model training metrics [here](https://wandb.ai/crlandsc/unconditional-drum-diffusion?workspace=user-crlandsc).*
+2. Install the Jupyter kernel for this environment (optional but recommended for the notebook):
 
-Pre-trained models can be downloaded to generate samples via the [inference notebook](Inference.ipynb). They can also be used as a base model to fine-tune on custom data. It is recommended to create subfolders within the [`saved_models`](saved_models/) folder to store each model's `.ckpt` and `.yaml` files.
+```bash
+python -m ipykernel install --user --name contrastive-audio-diffusion --display-name "contrastive-audio-diffusion"
+```
+
+3. Edit `.env` (rename from `.env.tmp`) to set `DIR_DATA`, `DIR_LOGS`, and optional W&B variables if you want logging.
 
 ---
 
-## Inference
-### Hugging Face Spaces
-Generate samples without code on [🤗 Hugging Face Spaces](https://huggingface.co/spaces/crlandsc/tiny-audio-diffusion)!
+**Datasets**
 
-### Jupyter Notebook
-#### Audio Sample Generation
-Current Capabilities:
-- Unconditional Generation
-- Conditional "Style-transfer" Generation
+This repo uses processed NSynth metadata and waveform exports for conditional training. The conditional datamodule expects a `metadata.jsonl` file that lists each sample's `Clean Path`, optional `Noisy Path`, `class` label, and any precomputed conditioning vectors. The included helper scripts and the datamodule make training reproducible from this metadata format.
 
-Open the [`Inference.ipynb`](Inference.ipynb) in Jupyter Notebook and follow the instructions to generate new audio samples. Ensure that the `"tiny-audio-diffusion (Python 3.10)"` kernel is active in Jupyter to run the notebook and you have downloaded the [pre-trained model](#Pre\-trained-Models) of interest from Hugging Face.
+If you want to prepare a small NSynth subset locally, use `scripts/prepare_nsynth_subset.py`. For processed metadata exports, point `datamodule.metadata_path` in your experiment config to the `metadata.jsonl` file.
 
 ---
 
-## Train
+**Training (conditional)**
 
-The model architecture has been constructed with [PyTorch Lightning](https://lightning.ai/docs/pytorch/latest/) and [Hydra](https://hydra.cc/docs/intro/) frameworks. All configurations for the model are contained within `.yaml` files and should be edited there rather than hardcoded.
+This repository includes convenience scripts and Hydra experiments for conditional training. Key points:
 
-[`exp/drum_diffusion.yaml`](exp/drum_diffusion.yaml) contains the default model configuration. Additional custom model configurations can be added to the [`exp`](exp/) folder.
+- `scripts/train_conditional_models.sh` — wrapper to launch conditional experiments (onehot, embedding, or both). Use this to quickly run the common variants.
+- Hydra experiments in `exp/` provide preconfigured model sizes and training settings. See `exp/nsynth_conditional_16gb_embedding_no_wandb.yaml` for an example embedding+contrastive setup.
 
-Custom models can be trained or fine-tuned on custom datasets. Datasets should consist of a folder of `.wav` audio files at the sampling rate used by the training config.
-
-For a quick Nsynth baseline, this repository now includes a small export script that downloads a single instrument family from [jg583/NSynth](https://huggingface.co/datasets/jg583/NSynth), writes it into a normal local WAV folder, and keeps the existing training loop unchanged. The default baseline uses the `guitar` family, duplicates the mono source to stereo, and resamples to 16kHz so training is lighter-weight.
-
-```bash
-python scripts/prepare_nsynth_subset.py --family guitar --max-items 512 --output-dir data/nsynth_guitar/wav_dataset
-```
-
-You can also reduce dataset variance by constraining exports to a specific instrument identity and note range. For example:
+Examples:
 
 ```bash
-python scripts/prepare_nsynth_subset.py --family guitar --instrument-str guitar_electronic_011 --pitch-min 45 --pitch-max 70 --velocity-min 75 --output-dir data/nsynth_guitar_tight/wav_dataset --max-items 512
-```
-
-To train or finetune models, run one of the following commands in the terminal from the repo's root folder and replace `<path/to/your/train/data>` with the path to your custom training set.
-
-
-**Train model from scratch (on CPU):**
-*(not recommended)*
-
-```bash
-python train.py exp=drum_diffusion datamodule.dataset.path=<path/to/your/train/data>
-```
-
-
-**Train model from scratch (on GPU):**
-
-```bash
-python train.py exp=drum_diffusion trainer.gpus=1 datamodule.dataset.path=<path/to/your/train/data>
-```
-
-**Train the Nsynth guitar baseline on GPU:**
-
-```bash
-python train.py exp=nsynth_guitar trainer.gpus=1
-```
-
-If you do not want Weights & Biases logging, use `exp=nsynth_guitar_no_wandb` instead.
-
-If you have more available VRAM and want a larger U-Net, use:
-
-```bash
-python train.py exp=nsynth_guitar_large_no_wandb trainer.gpus=1
-```
-
-W&B-enabled variant: `exp=nsynth_guitar_large`.
-
-*NOTE:* To use this repo with a GPU, you must have a CUDA-capable GPU and have the CUDA toolkit installed specific to your system (ex. Linux, x86_64, WSL-Ubuntu). More information can be found [here](https://developer.nvidia.com/cuda-toolkit).
-
-
-**Resume run from a checkpoint (with GPU):**
-
-```bash
-python train.py exp=drum_diffusion trainer.gpus=1 +ckpt=</path/to/checkpoint.ckpt> datamodule.dataset.path=<path/to/your/train/data>
-```
-
----
-
-## Dataset
-
-The data used to train the checkpoints listed above can be found on [🤗 Hugging Face](https://huggingface.co/datasets/crlandsc/tiny-audio-diffusion-drums).
-
-The Nsynth baseline in this repository uses [jg583/NSynth](https://huggingface.co/datasets/jg583/NSynth), filtered down to a single family so the model can be trained quickly on a small subset before trying broader instrument coverage.
-
-***Note:*** *This is a small and unbalanced dataset consisting of free samples that I had from my music production. These samples are not covered under the MIT license of this repository and cannot be used to train any commercial models, but can be used in personal and research contexts.*
-
-***Note:*** *For appropriately diverse models, larger datasets should be used to avoid memorization of training data.*
-
-### Conditional NSynth Workflow (Box + One-Hot/Embedding)
-
-This repository includes a conditional training path for multiple instrument families using preprocessed waveform metadata (`clean`, `noisy`, class label, and conditioning vector).
-
-1. Download the processed dataset tree from Box (metadata + waveforms):
-
-```bash
-python scripts/download_box_processed_dataset.py --box-folder-id <BOX_FOLDER_ID> --destination data/nsynth_waveform_processed
-```
-
-2. Train the conditional model (CPU default; set `trainer.gpus=1` for GPU):
-
-```bash
-python train.py exp=nsynth_conditional_no_wandb datamodule.metadata_path=data/nsynth_waveform_processed/metadata/metadata.jsonl
-```
-
-3. For a larger 16GB VRAM profile (higher-capacity U-Net and longer sampling chains):
-
-```bash
-python train.py exp=nsynth_conditional_16gb_no_wandb datamodule.metadata_path=data/nsynth_waveform_processed/metadata/metadata.jsonl
-```
-
-The conditional experiment provides one-hot conditioning from metadata labels, optional learnable label-embedding conditioning (`model.conditioning_mode=label_embedding`), optional contrastive auxiliary loss between audio and label embedding spaces, optional low/high-pass filtering in the datamodule for source-isolation cleanup, and per-batch Mel spectrograms with class labels for inspection/logging.
-
-#### Quick Commands To Train Both Paths
-
-Use the launcher below to make training commands easy to run from the repo root:
-
-```bash
+# One‑hot conditioning (no contrastive loss)
 scripts/train_conditional_models.sh onehot data/nsynth_waveform_processed/metadata/metadata.jsonl
+
+# Label embedding + contrastive loss
 scripts/train_conditional_models.sh embedding data/nsynth_waveform_processed/metadata/metadata.jsonl
-scripts/train_conditional_models.sh both data/nsynth_waveform_processed/metadata/metadata.jsonl
 ```
 
-You can append any extra Hydra overrides (for example `+trainer.fast_dev_run=1`) as additional arguments.
-
-Equivalent direct commands:
+Or call `train.py` directly with Hydra overrides:
 
 ```bash
-PYTHONPATH=. python train.py exp=nsynth_conditional_16gb_no_wandb datamodule.metadata_path=data/nsynth_waveform_processed/metadata/metadata.jsonl model.conditioning_mode=onehot model.use_contrastive_loss=false
 PYTHONPATH=. python train.py exp=nsynth_conditional_16gb_embedding_no_wandb datamodule.metadata_path=data/nsynth_waveform_processed/metadata/metadata.jsonl model.conditioning_mode=label_embedding model.use_contrastive_loss=true
 ```
 
+Notes:
+- During training the pipeline uses the clean waveform as the ground truth for the denoising objective and also as the audio anchor for the contrastive objective. See `main/diffusion_module.py` for the `training_step` implementation.
+- The code supports training with clean‑only datasets (no noisy inputs) — the dataset loader gracefully handles missing noisy paths and falls back to clean waveforms.
+
 ---
 
-## Repository Structure
+**Inference**
 
-The structure of this repository is as follows:
+Use the interactive `Inference.ipynb` to load a checkpoint and generate samples. The notebook supports:
+
+- Loading metadata to auto‑derive class names and conditioning dims.
+- One‑shot unconditional and class‑conditioned generation.
+- Reference‑based conditional generation (style transfer from a reference waveform).
+
+Set `metadata_path_override` in the notebook to the metadata used during training to ensure class names and conditioning dims match the checkpoint.
+
+**Django Real‑Time Demo**
+
+This repository includes a lightweight Django demo that exercises the inference path for near‑real‑time conditional audio morphing and benchmarking. The demo reuses the `main/inference_helpers.py` utilities, caches a loaded model instance, runs generation in inference mode, and measures latency / real‑time factor for multiple sampler step counts.
+
+To run the demo, set the model, checkpoint and metadata paths (or enter them in the web UI form) and start the server. On Linux/macOS use environment exports, for example:
+
+```bash
+export TAD_CONFIG_PATH=exp/nsynth_conditional_16gb_embedding_no_wandb.yaml
+export TAD_CKPT_PATH=logs/ckpts/<run-folder>/<checkpoint>.ckpt
+export TAD_METADATA_PATH=data/nsynth_waveform_processed/metadata/metadata.jsonl
+export TAD_CONDITIONING_MODE=label_embedding
+export TAD_CLASS_NAMES=bass,brass,flute,guitar,keyboard,mallet,organ
+python manage.py runserver 127.0.0.1:8000
 ```
-├── main
-│   ├── diffusion_module.py     - contains pl model, data loading, and logging functionalities for training
-│   └── utils.py                - contains utility functions for training
-├── exp
-│   └── *.yaml                  - Hydra configuration files
-├── setup
-│   ├── environment.yml         - file to set up conda environment
-│   └── requirements.txt        - contains repo dependencies
-├── images                      - directory containing images for README.md
-│   └── *.png
-├── samples                     - directory containing sample outputs from tiny-audio-diffusion models
-│   └── *.wav
-├── .env.tmp                    - temporary environment variables (rename to .env)
-├── .gitignore
-├── README.md
-├── Inference.ipynb             - Jupyter notebook for running inference to generate new samples
-├── config.yaml                 - Hydra base configs
-├── train.py                    - script for training
-├── data                        - directory to host custom training data
-│   └── wav_dataset
-│       └── (*.wav)
-└── saved_models                - directory to host model checkpoints and hyper-parameters for inference
-    └── (kicks/snare/etc.)
-        ├── (*.ckpt)            - pl model checkpoint file
-        └── (config.yaml)       - pl model hydra hyperparameters (required for inference)
-```
+
+Open `http://127.0.0.1:8000/` in your browser. The UI lets you:
+
+- upload a short reference audio file or pick a dataset reference sample,
+- select a target class from the configured class list,
+- trigger conditional generation and view output audio, and
+- inspect latency and real‑time‑factor graphs for several sampler step counts.
+
+If you prefer to avoid restarting the server when changing models, paste the desired checkpoint, config, metadata path, and conditioning mode directly into the demo form — the server will load the new model dynamically.
+
+If no trained conditional checkpoint is available locally, you may use a compatible, untrained checkpoint for UI and latency benchmarking only. It will load the correct architecture and exercise the generation path, but it will not produce meaningful audio quality.
+
+Place the Django app in the `web/` folder (if present) or consult `web/README.md` for deployment notes and dependency installation.
+
+**Model architecture**
+
+High level:
+
+- `UNetV0` (1‑D U‑Net) is the denoiser core used by `DiffusionModel` and `VDiffusion`.
+- Attention and cross‑attention are optionally enabled per U‑Net stage to improve long‑range context and conditioning fusion.
+- `ConditionalModel` implements concatenative conditioning (one‑hot) and `EmbeddingConditionalModel` implements embedding/cross‑attention conditioning with optional contrastive heads (`audio_to_latent`, `text_embedding`, `text_to_latent`).
+
+If you want architectural intuition, this Medium post covers diffusion and denoising concepts in approachable detail: https://medium.com/@zacharyhoulton/audio-denoising-using-diffusion-c2ae04d20c4e
+
+---
+
+**Where to look in the code**
+
+- `main/diffusion_module.py` — model wrappers, conditional training_step, contrastive loss, datamodule.
+- `main/inference_helpers.py` — checkpoint loading, metadata parsing, and inference utilities.
+- `main/nsynth_waveform_dataset.py` — metadata format, waveform loading, and dataset handling.
+- `exp/` — experiment YAML files for Hydra. Edit these for different U‑Net sizes, conditioning modes, and sampling settings.
+- `scripts/train_conditional_models.sh` — convenience launcher for conditional experiment runs.
+- `Inference.ipynb` — interactive example for loading checkpoints, sampling, and diagnostics.
+
+---
+
+**License & attribution**
+
+This project is released under the MIT license. Maintainers: Samuel Li, Zachary Houlton, Ariv Mondal, Daniel Zhu. The current repository is the canonical source for "Contrastive Audio Diffusion" experiments, datasets, and training recipes.
+
+
