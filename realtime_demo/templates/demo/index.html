@@ -1,0 +1,232 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Conditional Audio Diffusion Real-Time Demo</title>
+  <link rel="stylesheet" href="{% static 'demo/styles.css' %}">
+</head>
+<body>
+  <main class="shell">
+    <section class="topbar">
+      <div>
+        <h1>Conditional Audio Diffusion</h1>
+        <p>Conditional audio morphing demo with live latency benchmarks.</p>
+      </div>
+      <div class="status {% if status.ready %}ready{% else %}blocked{% endif %}">
+        {% if status.ready %}Model ready{% else %}Model setup needed{% endif %}
+      </div>
+    </section>
+
+    {% if not status.ready %}
+      <section class="notice">
+        <strong>Missing:</strong> {{ status.missing|join:", " }}.
+        {% if status.missing_modules %}
+          Run the server from the project conda environment: <code>conda activate tiny-audio-diffusion</code>.
+          Missing Python modules: <code>{{ status.missing_modules|join:", " }}</code>.
+        {% endif %}
+        {% if "checkpoint" in status.missing %}
+          Set <code>TAD_CKPT_PATH</code> to a trained checkpoint before generating.
+          {% if status.checkpoint_candidates %}
+            Newest local checkpoint candidate: <code>{{ status.checkpoint_candidates.0 }}</code>.
+          {% endif %}
+        {% endif %}
+        {% if "compatible checkpoint" in status.missing %}
+          {{ status.checkpoint_warning }}
+        {% endif %}
+      </section>
+    {% endif %}
+
+    {% if status.ckpt_autodetected %}
+      <section class="notice">
+        Newest local checkpoint found: <code>{{ status.ckpt_path }}</code>.
+        {% if status.checkpoint_warning %}
+          It does not match the selected <code>{{ status.checkpoint_signature }}</code> config.
+        {% else %}
+          It is selected below as the default checkpoint.
+        {% endif %}
+        {% if status.checkpoint_note %}
+          {{ status.checkpoint_note }}
+        {% endif %}
+      </section>
+    {% endif %}
+
+    <section class="workspace">
+      <form id="demo-form" class="panel">
+        {% csrf_token %}
+        <label>
+          Reference audio
+          <input type="file" name="reference_audio" accept="audio/*,.wav,.flac,.mp3,.ogg,.m4a,.pt,.pth">
+        </label>
+
+        <label>
+          Checkpoint path
+          <input type="text" name="ckpt_path" value="{{ status.ckpt_path }}" placeholder="logs/ckpts/.../epoch=...ckpt">
+        </label>
+
+        <label>
+          Config path
+          <input type="text" name="config_path" value="{{ status.config_path }}">
+        </label>
+
+        <label>
+          Metadata path
+          <input type="text" name="metadata_path" value="{{ status.metadata_path|default:'' }}" placeholder="optional for uploaded audio">
+        </label>
+
+        <label>
+          Conditioning mode
+          <select name="conditioning_mode">
+            <option value="label_embedding" {% if status.conditioning_mode == "label_embedding" %}selected{% endif %}>label_embedding</option>
+            <option value="onehot" {% if status.conditioning_mode == "onehot" %}selected{% endif %}>onehot</option>
+          </select>
+        </label>
+
+        <label>
+          Class names
+          <input id="class-names-input" type="text" name="class_names" value="{{ status.class_names_csv }}" placeholder="comma-separated class order used by checkpoint">
+        </label>
+
+        <div class="grid">
+          <label>
+            Reference class
+            <select id="reference-class-select" name="reference_class">
+              {% for class_name in status.class_names %}
+                <option value="{{ class_name }}" {% if class_name == "bass" %}selected{% endif %}>{{ class_name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Target class
+            <select id="target-class-select" name="target_class">
+              {% for class_name in status.class_names %}
+                <option value="{{ class_name }}" {% if class_name == "guitar" %}selected{% endif %}>{{ class_name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+
+        <div class="grid">
+          <label>
+            Dataset split
+            <select name="reference_split">
+              <option>train</option>
+              <option>valid</option>
+              <option selected>test</option>
+            </select>
+          </label>
+          <label>
+            Dataset row
+            <input type="number" name="reference_index" min="0" placeholder="random">
+          </label>
+        </div>
+
+        <div class="grid">
+          <label>
+            Seed
+            <input type="number" name="seed" value="2450">
+          </label>
+          <label>
+            Noise scale
+            <input type="number" name="noise_scale" value="0.35" min="0" max="1" step="0.05">
+          </label>
+        </div>
+
+        <div class="grid">
+          <label>
+            Final steps
+            <input type="number" name="steps" value="4" min="1" max="500">
+          </label>
+          <label>
+            Benchmark steps
+            <input type="text" name="benchmark_steps" value="1,2,4">
+          </label>
+        </div>
+
+        <button type="submit" id="run-button">Generate + Benchmark</button>
+      </form>
+
+      <section class="panel results">
+        <div class="result-row">
+          <div>
+            <h2>Reference</h2>
+            <audio id="reference-audio" controls></audio>
+          </div>
+          <div>
+            <h2>Noisy input</h2>
+            <audio id="noisy-input-audio" controls></audio>
+          </div>
+          <div>
+            <h2>Generated</h2>
+            <audio id="generated-audio" controls></audio>
+          </div>
+        </div>
+
+        <div id="message" class="message">Waiting for a run.</div>
+        <canvas id="benchmark-chart" width="720" height="320"></canvas>
+
+        <div class="metrics">
+          <div><span>Duration</span><strong id="duration">-</strong></div>
+          <div><span>Ref RMS</span><strong id="reference-rms">-</strong></div>
+          <div><span>Noisy RMS</span><strong id="noisy-rms">-</strong></div>
+          <div><span>Gen RMS</span><strong id="generated-rms">-</strong></div>
+          <div><span>GPU peak</span><strong id="peak-memory">-</strong></div>
+        </div>
+
+        <section class="analysis">
+          <h2>Reference-Based Error Analysis</h2>
+          <div id="metrics-message" class="message">Run generation to compute error maps.</div>
+          <div class="metrics detail-metrics">
+            <div><span>Noisy SNR</span><strong id="snr-noisy">-</strong></div>
+            <div><span>Output SNR</span><strong id="snr-output">-</strong></div>
+            <div><span>SNR gain</span><strong id="snr-gain">-</strong></div>
+            <div><span>Output MSE</span><strong id="mse-output">-</strong></div>
+          </div>
+
+          <div class="viz-grid">
+            <figure>
+              <img id="psnr-heatmap" alt="Time-frequency PSNR heatmap">
+              <figcaption>Lower PSNR marks time-frequency bins with larger residual error.</figcaption>
+            </figure>
+            <figure>
+              <img id="segment-snr" alt="Segment-wise SNR improvement plot">
+              <figcaption>Negative values indicate windows where denoising made SNR worse.</figcaption>
+            </figure>
+            <figure>
+              <img id="mel-difference" alt="Before and after Mel spectrogram difference">
+              <figcaption>Mel-band power changes between noisy input and generated output.</figcaption>
+            </figure>
+          </div>
+
+          <div class="tables">
+            <div>
+              <h2>Lowest PSNR Regions</h2>
+              <table>
+                <thead><tr><th>Time</th><th>Freq</th><th>PSNR</th></tr></thead>
+                <tbody id="worst-tf-regions"></tbody>
+              </table>
+            </div>
+            <div>
+              <h2>Worst SNR Windows</h2>
+              <table>
+                <thead><tr><th>Window</th><th>Gain</th><th>Out SNR</th></tr></thead>
+                <tbody id="worst-segments"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </section>
+    </section>
+
+    <section class="config">
+      <div><span>Config</span><code>{{ status.config_path }}</code></div>
+      <div><span>Checkpoint</span><code>{{ status.ckpt_path|default:"not set" }}</code></div>
+      <div><span>Metadata</span><code>{{ status.metadata_path|default:"not set" }}</code></div>
+      <div><span>Classes</span><code>{{ status.class_names_csv }}</code></div>
+      <div><span>Device</span><code>{{ status.device }}</code></div>
+    </section>
+  </main>
+  <script src="{% static 'demo/app.js' %}"></script>
+</body>
+</html>

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import os
 import re
@@ -22,7 +23,7 @@ from main.diffusion_module import (
     NSynthConditionalDatamodule,
 )
 
-DEFAULT_CLASS_NAMES = ["bass", "guitar", "keyboard"]
+DEFAULT_CLASS_NAMES = ["bass", "brass", "flute", "guitar", "keyboard", "mallet", "organ"]
 
 
 @dataclass
@@ -146,30 +147,132 @@ def _build_core_model(model_configs: dict[str, Any]) -> DiffusionModel:
     return DiffusionModel(**core_kwargs)
 
 
+def _checkpoint_shape_hints(state_dict: dict[str, Tensor]) -> dict[str, Any]:
+    hints: dict[str, Any] = {}
+
+    class_embedding = state_dict.get("class_embedding.weight")
+    if class_embedding is not None and class_embedding.ndim == 2:
+        hints["num_classes"] = int(class_embedding.shape[0])
+        hints["label_embedding_dim"] = int(class_embedding.shape[1])
+        hints["conditioning_mode"] = "label_embedding"
+
+    projection = state_dict.get("embedding_to_conditioning.weight")
+    if projection is not None and projection.ndim == 2:
+        hints["conditioning_dim"] = int(projection.shape[0])
+        hints["label_embedding_dim"] = int(projection.shape[1])
+        hints["conditioning_mode"] = "label_embedding"
+
+    text_embedding = state_dict.get("text_embedding.weight")
+    if text_embedding is not None and text_embedding.ndim == 2:
+        hints.setdefault("num_classes", int(text_embedding.shape[0]))
+        hints.setdefault("label_embedding_dim", int(text_embedding.shape[1]))
+
+    text_projection = state_dict.get("text_to_latent.weight")
+    if text_projection is not None and text_projection.ndim == 2:
+        hints["contrastive_projection_dim"] = int(text_projection.shape[0])
+        hints["use_contrastive_loss"] = True
+
+    for key, value in state_dict.items():
+        if key.endswith(".norm_context.weight") and value.ndim == 1:
+            hints.setdefault("conditioning_dim", int(value.shape[0]))
+            break
+
+    return hints
+
+
+def _apply_checkpoint_shape_hints(
+    *,
+    pl_configs: dict[str, Any],
+    model_configs: dict[str, Any],
+    state_dict: dict[str, Tensor],
+    conditioning_mode_override: Optional[str],
+) -> None:
+    hints = _checkpoint_shape_hints(state_dict)
+    conditioning_dim = hints.get("conditioning_dim")
+    if conditioning_dim is not None:
+        pl_configs["conditioning_dim"] = conditioning_dim
+        pl_configs["num_classes"] = hints.get("num_classes", conditioning_dim)
+        model_configs["embedding_features"] = conditioning_dim
+
+    for key in (
+        "label_embedding_dim",
+        "use_contrastive_loss",
+        "contrastive_projection_dim",
+    ):
+        if key in hints:
+            pl_configs[key] = hints[key]
+
+    if conditioning_mode_override is None and "conditioning_mode" in hints:
+        pl_configs["conditioning_mode"] = hints["conditioning_mode"]
+
+
+def _class_names_from_metadata(metadata_path: Optional[str]) -> list[str]:
+    if not metadata_path:
+        return []
+    path = Path(metadata_path).expanduser()
+    if not path.exists():
+        return []
+
+    names = set()
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            class_name = row.get("class")
+            if class_name is not None:
+                names.add(str(class_name))
+    return sorted(names)
+
+
+def _class_names_from_config(config: dict[str, Any]) -> list[str]:
+    raw = config.get("class_names")
+    if raw is None:
+        raw = (config.get("datamodule") or {}).get("class_names")
+    if isinstance(raw, str):
+        return [item.strip() for item in raw.split(",") if item.strip()]
+    if isinstance(raw, list):
+        return [str(item) for item in raw]
+    return []
+
+
 def load_inference_context(
     config_path: str,
     ckpt_path: str,
     *,
     conditioning_mode_override: Optional[str] = None,
     metadata_path_override: Optional[str] = None,
+    class_names_override: Optional[list[str]] = None,
     device: Optional[str] = None,
 ) -> InferenceContext:
     config = load_resolved_config(config_path)
     pl_configs = config["model"]
     model_configs = config["model"]["model"]
+    checkpoint = torch.load(ckpt_path, map_location="cpu")
+    state_dict = checkpoint["state_dict"]
     model_target = str(config["model"].get("_target_", ""))
     is_embedding_model = "EmbeddingConditionalModel" in model_target
     is_conditional = ("ConditionalModel" in model_target) or is_embedding_model
 
     if conditioning_mode_override is not None:
         pl_configs["conditioning_mode"] = conditioning_mode_override
+    _apply_checkpoint_shape_hints(
+        pl_configs=pl_configs,
+        model_configs=model_configs,
+        state_dict=state_dict,
+        conditioning_mode_override=conditioning_mode_override,
+    )
 
     conditioning_mode = pl_configs.get("conditioning_mode", "onehot")
     conditioning_dim = int(pl_configs.get("conditioning_dim", config.get("conditioning_dim", 3)))
     audio_channels = int(config.get("audio_channels", model_configs.get("in_channels", 1)))
     sample_rate = int(config.get("sampling_rate", 16000))
     sample_length = int(config.get("length", 16384))
-    class_names = list(DEFAULT_CLASS_NAMES)
+    class_names = (
+        list(class_names_override)
+        if class_names_override
+        else _class_names_from_config(config)
+    )
 
     core_model = _build_core_model(model_configs)
 
@@ -230,7 +333,6 @@ def load_inference_context(
     if torch.cuda.is_available():
         model = model.to(device or "cuda")
 
-    state_dict = torch.load(ckpt_path, map_location="cpu")["state_dict"]
     model.load_state_dict(state_dict, strict=False)
 
     datamodule = None
@@ -239,21 +341,35 @@ def load_inference_context(
         datamodule_cfg = config.get("datamodule", {})
         if str(datamodule_cfg.get("_target_", "")).endswith("NSynthConditionalDatamodule"):
             resolved_metadata_path = metadata_path_override or datamodule_cfg["metadata_path"]
-            datamodule = NSynthConditionalDatamodule(
-                metadata_path=resolved_metadata_path,
-                batch_size=datamodule_cfg["batch_size"],
-                num_workers=datamodule_cfg["num_workers"],
-                pin_memory=datamodule_cfg.get("pin_memory", False),
-                include_spectrogram=datamodule_cfg.get("include_spectrogram", True),
-                sample_rate=datamodule_cfg.get("sample_rate", sample_rate),
-                n_fft=datamodule_cfg.get("n_fft", 1024),
-                hop_length=datamodule_cfg.get("hop_length", 256),
-                n_mels=datamodule_cfg.get("n_mels", 128),
-                lowpass_hz=datamodule_cfg.get("lowpass_hz", None),
-                highpass_hz=datamodule_cfg.get("highpass_hz", None),
-                target_length=datamodule_cfg.get("target_length", sample_length),
-            )
-            datamodule.setup()
+            if Path(resolved_metadata_path).expanduser().exists():
+                datamodule = NSynthConditionalDatamodule(
+                    metadata_path=resolved_metadata_path,
+                    batch_size=datamodule_cfg["batch_size"],
+                    num_workers=datamodule_cfg["num_workers"],
+                    pin_memory=datamodule_cfg.get("pin_memory", False),
+                    include_spectrogram=datamodule_cfg.get("include_spectrogram", True),
+                    sample_rate=datamodule_cfg.get("sample_rate", sample_rate),
+                    n_fft=datamodule_cfg.get("n_fft", 1024),
+                    hop_length=datamodule_cfg.get("hop_length", 256),
+                    n_mels=datamodule_cfg.get("n_mels", 128),
+                    lowpass_hz=datamodule_cfg.get("lowpass_hz", None),
+                    highpass_hz=datamodule_cfg.get("highpass_hz", None),
+                    target_length=datamodule_cfg.get("target_length", sample_length),
+                )
+                datamodule.setup()
+                if not class_names:
+                    class_names = [
+                        name
+                        for name, _ in sorted(
+                            datamodule.class_to_index.items(),
+                            key=lambda item: item[1],
+                        )
+                    ]
+
+    if not class_names:
+        class_names = _class_names_from_metadata(resolved_metadata_path or metadata_path_override)
+    if not class_names:
+        class_names = list(DEFAULT_CLASS_NAMES)
 
     return InferenceContext(
         config_path=config_path,
@@ -282,6 +398,12 @@ def class_conditioning(class_name: str, class_names: list[str], device: torch.de
 
 
 def prepare_conditioning_inputs(context: InferenceContext, class_name: str):
+    if len(context.class_names) != context.conditioning_dim:
+        raise ValueError(
+            "Class mapping does not match model conditioning dimension: "
+            f"{len(context.class_names)} class names for conditioning_dim={context.conditioning_dim}. "
+            "Set TAD_CLASS_NAMES to the exact comma-separated class order used by the checkpoint."
+        )
     class_id, onehot_conditioning = class_conditioning(
         class_name,
         context.class_names,

@@ -25,6 +25,7 @@ notebook
 matplotlib
 ipykernel
 gradio
+django>=5.0,<6.0
 
 k-diffusion
 v-diffusion-pytorch
