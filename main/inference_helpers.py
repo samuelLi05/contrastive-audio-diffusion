@@ -77,6 +77,41 @@ def _resolve_token(token: str, root: dict[str, Any], repo_root: str) -> Any:
         return "${" + token + "}"
     return value
 
+def _class_names_from_context(
+    datamodule: Optional[NSynthConditionalDatamodule],
+    metadata_path: Optional[str],
+    conditioning_dim: int,
+) -> list[str]:
+    if datamodule is not None and datamodule.class_to_index:
+        return [
+            name
+            for name, _ in sorted(datamodule.class_to_index.items(), key=lambda item: item[1])
+        ]
+
+    if metadata_path is not None:
+        metadata_file = Path(metadata_path).expanduser().resolve()
+        if metadata_file.exists():
+            classes: set[str] = set()
+            with metadata_file.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    class_name = row.get("class")
+                    if class_name is not None:
+                        classes.add(str(class_name))
+            if classes:
+                return sorted(classes)
+
+    if conditioning_dim > 0:
+        raise ValueError(
+            "Unable to infer class names from metadata. "
+            "Provide a valid metadata jsonl via datamodule.metadata_path or metadata_path_override."
+        )
+
+    return []
+
+
 
 def _resolve_simple_refs(value: Any, root: dict[str, Any], repo_root: str):
     if isinstance(value, dict):
