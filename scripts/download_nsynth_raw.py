@@ -35,10 +35,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--destination",
-        default=os.environ.get(
-            "BOX_NSYNTH_RAW_DIR",
-            r"C:\Users\hoult\Box\Final_Project_Data\nsynth\raw",
-        ),
+        default=os.environ.get("BOX_NSYNTH_RAW_DIR", "data/nsynth/raw"),
         help=(
             "Local cache directory for the raw archives. When Box upload is enabled, "
             "this directory is only used as a temporary staging area."
