@@ -2,7 +2,8 @@
 
 Authors: Samuel Li, Zachary Houlton, Ariv Mondal, Daniel Zhu
 
-Originally forked from an earlier tiny-audio-diffusion repository; this codebase has been refactored and extended into a new, standalone project focused on conditional waveform diffusion with contrastive label alignment. The original project is acknowledged here once as a starting point.
+Originally forked from an earlier tiny-audio-diffusion repository; this codebase has been refactored and extended into a new, standalone project focused on conditional waveform diffusion with contrastive label alignment. The original project is acknowledged here once as a starting point. 
+https://github.com/crlandsc/tiny-audio-diffusion 
 
 ## Motivation
 
